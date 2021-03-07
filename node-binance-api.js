@@ -15,6 +15,7 @@ let api = function Binance( options = {} ) {
     const crypto = require( 'crypto' );
     const file = require( 'fs' );
     const url = require( 'url' );
+    const JSONbig = require( 'json-bigint' );
     const HttpsProxyAgent = require( 'https-proxy-agent' );
     const SocksProxyAgent = require( 'socks-proxy-agent' );
     const stringHash = require( 'string-hash' );
@@ -100,7 +101,7 @@ let api = function Binance( options = {} ) {
         if ( typeof Binance.options.verbose === 'undefined' ) Binance.options.verbose = default_options.verbose;
         if ( typeof Binance.options.keepAlive === 'undefined' ) Binance.options.keepAlive = default_options.keepAlive;
         if ( typeof Binance.options.localAddress === 'undefined' ) Binance.options.localAddress = default_options.localAddress;
-        if ( typeof Binance.options.family === 'undefined' ) Binance.options.localAddress = default_options.family;
+        if ( typeof Binance.options.family === 'undefined' ) Binance.options.family = default_options.family;
         if ( typeof Binance.options.urls !== 'undefined' ) {
             const { urls } = Binance.options;
             if ( typeof urls.base === 'string' ) base = urls.base;
@@ -184,10 +185,13 @@ let api = function Binance( options = {} ) {
         if ( !cb ) return;
         if ( error ) return cb( error, {} );
         if ( response && response.statusCode !== 200 ) return cb( response, {} );
-        return cb( null, JSON.parse( body ) );
+        return cb( null, JSONbig.parse( body ) );
     }
 
-    const proxyRequest = ( opt, cb ) => request( addProxy( opt ), reqHandler( cb ) );
+    const proxyRequest = ( opt, cb ) => {
+        const req = request( addProxy( opt ), reqHandler( cb ) ).on('error', (err) => { cb( err, {} ) });
+        return req;
+    }
 
     const reqObj = ( url, data = {}, method = 'GET', key ) => ( {
         url: url,
@@ -212,7 +216,7 @@ let api = function Binance( options = {} ) {
         timeout: Binance.options.recvWindow,
         forever: Binance.options.keepAlive,
         qsStringifyOptions: {
-          arrayFormat: 'repeat'
+            arrayFormat: 'repeat'
         },
         headers: {
             'User-Agent': userAgent,
@@ -236,18 +240,18 @@ let api = function Binance( options = {} ) {
     // XXX: This one works with array (e.g. for dust.transfer)
     // XXX: I _guess_ we could use replace this function with the `qs` module
     const makeQueryString = q =>
-      Object.keys(q)
-        .reduce((a, k) => {
-          if (Array.isArray(q[k])) {
-            q[k].forEach(v => {
-              a.push(k + "=" + encodeURIComponent(v))
-            })
-          } else if (q[k] !== undefined) {
-            a.push(k + "=" + encodeURIComponent(q[k]));
-          }
-          return a;
-        }, [])
-        .join("&");
+        Object.keys( q )
+            .reduce( ( a, k ) => {
+                if ( Array.isArray( q[k] ) ) {
+                    q[k].forEach( v => {
+                        a.push( k + "=" + encodeURIComponent( v ) )
+                    } )
+                } else if ( q[k] !== undefined ) {
+                    a.push( k + "=" + encodeURIComponent( q[k] ) );
+                }
+                return a;
+            }, [] )
+            .join( "&" );
 
     /**
      * Create a http request to the public API
@@ -258,7 +262,7 @@ let api = function Binance( options = {} ) {
      * @return {undefined}
      */
     const apiRequest = ( url, data = {}, callback, method = 'GET' ) => {
-        if ( !Binance.options.APIKEY ) throw Error( 'apiRequest: Invalid API Key' );
+        requireApiKey( 'apiRequest' );
         let opt = reqObj(
             url,
             data,
@@ -267,6 +271,28 @@ let api = function Binance( options = {} ) {
         );
         proxyRequest( opt, callback );
     };
+
+    // Check if API key is empty or invalid
+    const requireApiKey = function( source = 'requireApiKey', fatalError = true ) {
+        if ( !Binance.options.APIKEY ) {
+            if ( fatalError ) throw Error( `${ source }: Invalid API Key!` );
+            return false;
+        }
+        return true;
+    }
+
+    // Check if API secret is present
+    const requireApiSecret = function( source = 'requireApiSecret', fatalError = true ) {
+        if ( !Binance.options.APIKEY ) {
+            if ( fatalError ) throw Error( `${ source }: Invalid API Key!` );
+            return false;
+        }
+        if ( !Binance.options.APISECRET ) {
+            if ( fatalError ) throw Error( `${ source }: Invalid API Secret!` );
+            return false;
+        }
+        return true;
+    }
 
     /**
      * Make market request
@@ -277,7 +303,7 @@ let api = function Binance( options = {} ) {
      * @return {undefined}
      */
     const marketRequest = ( url, data = {}, callback, method = 'GET' ) => {
-        if ( !Binance.options.APIKEY ) throw Error( 'apiRequest: Invalid API Key' );
+        requireApiKey( 'marketRequest' );
         let query = makeQueryString( data );
         let opt = reqObj(
             url + ( query ? '?' + query : '' ),
@@ -298,8 +324,7 @@ let api = function Binance( options = {} ) {
      * @return {undefined}
      */
     const signedRequest = ( url, data = {}, callback, method = 'GET', noDataInSignature = false ) => {
-        if ( !Binance.options.APIKEY ) throw Error( 'apiRequest: Invalid API Key' );
-        if ( !Binance.options.APISECRET ) throw Error( 'signedRequest: Invalid API Secret' );
+        requireApiSecret( 'signedRequest' );
         data.timestamp = new Date().getTime() + Binance.info.timeOffset;
         if ( typeof data.recvWindow === 'undefined' ) data.recvWindow = Binance.options.recvWindow;
         let query = method === 'POST' && noDataInSignature ? '' : makeQueryString( data );
@@ -409,6 +434,7 @@ let api = function Binance( options = {} ) {
             quantity: quantity
         };
         if ( typeof flags.type !== 'undefined' ) opt.type = flags.type;
+        if (typeof flags.isIsolated !== 'undefined') opt.isIsolated = flags.isIsolated;
         if ( opt.type.includes( 'LIMIT' ) ) {
             opt.price = price;
             if ( opt.type !== 'LIMIT_MAKER' ) {
@@ -499,8 +525,8 @@ let api = function Binance( options = {} ) {
             if ( typeof flags.type === 'undefined' ) flags.type = false; // TRADE, SIGNED, MARKET_DATA, USER_DATA, USER_STREAM
             else {
                 if ( typeof data.recvWindow === 'undefined' ) data.recvWindow = Binance.options.recvWindow;
+                requireApiKey( 'promiseRequest' );
                 headers['X-MBX-APIKEY'] = Binance.options.APIKEY;
-                if ( !Binance.options.APIKEY ) return reject( 'Invalid API Key' );
             }
             let baseURL = typeof flags.base === 'undefined' ? base : flags.base;
             if ( Binance.options.test && baseURL === fapi ) baseURL = fapiTest;
@@ -513,7 +539,7 @@ let api = function Binance( options = {} ) {
                 followAllRedirects: true
             };
             if ( flags.type === 'SIGNED' || flags.type === 'TRADE' || flags.type === 'USER_DATA' ) {
-                if ( !Binance.options.APISECRET ) return reject( 'Invalid API Secret' );
+                if ( !requireApiSecret( 'promiseRequest' ) ) return reject( 'promiseRequest: Invalid API Secret!' );
                 data.timestamp = new Date().getTime() + Binance.info.timeOffset;
                 query = makeQueryString( data );
                 data.signature = crypto.createHmac( 'sha256', Binance.options.APISECRET ).update( query ).digest( 'hex' ); // HMAC hash header
@@ -538,15 +564,15 @@ let api = function Binance( options = {} ) {
                                 Binance.info.futuresLatency = response.headers['x-response-time'] || 0;
                             }
                         }
-                        if ( !error && response.statusCode == 200 ) return resolve( JSON.parse( body ) );
+                        if ( !error && response.statusCode == 200 ) return resolve( JSONbig.parse( body ) );
                         if ( typeof response.body !== 'undefined' ) {
-                            return resolve( JSON.parse( response.body ) );
+                            return resolve( JSONbig.parse( response.body ) );
                         }
                         return reject( response );
                     } catch ( err ) {
                         return reject( `promiseRequest error #${ response.statusCode }` );
                     }
-                } );
+                } ).on( 'error', reject );
             } catch ( err ) {
                 return reject( err );
             }
@@ -662,9 +688,9 @@ let api = function Binance( options = {} ) {
             } );
             ws = new WebSocket( stream + endpoint, { agent: agent } );
         } else if ( httpsproxy !== false ) {
-            if ( Binance.options.verbose ) Binance.options.log( 'using proxy server ' + agent );
             let config = url.parse( httpsproxy );
             let agent = new HttpsProxyAgent( config );
+            if ( Binance.options.verbose ) Binance.options.log( 'using proxy server ' + agent );
             ws = new WebSocket( stream + endpoint, { agent: agent } );
         } else {
             ws = new WebSocket( stream + endpoint );
@@ -1191,6 +1217,23 @@ let api = function Binance( options = {} ) {
     };
 
     /**
+     * Converts the futures UserData stream ACCOUNT_CONFIG_UPDATE into a friendly object
+     * @param {object} data - user config callback data type
+     * @return {object} - user friendly data type
+     */
+    const fUserConfigDataAccountUpdateConvertData = data => {
+        return {
+            eventType: data.e,
+            eventTime: data.E,
+            transactionTime: data.T,
+            ac: {
+                symbol: data.ac.s,
+                leverage: data.ac.l
+            }
+        };
+    };
+
+    /**
      * Converts the futures UserData stream ACCOUNT_UPDATE data into a friendly object
      * @param {object} data - user data callback data type
      * @return {object} - user friendly data type
@@ -1243,8 +1286,8 @@ let api = function Binance( options = {} ) {
                 }
             };
 
-            const balanceResult= [];
-            const positionResult= [];
+            const balanceResult = [];
+            const positionResult = [];
 
             for ( let balance of balances ) {
                 balanceResult.push( balanceConverter( balance ) );
@@ -1261,7 +1304,7 @@ let api = function Binance( options = {} ) {
                 positions
             };
         };
-        updateData = updateConverter(updateData);
+        updateData = updateConverter( updateData );
         return {
             eventType,
             eventTime,
@@ -1352,7 +1395,7 @@ let api = function Binance( options = {} ) {
                 realizedProfit
             };
         };
-        order = orderConverter(order);
+        order = orderConverter( order );
         return {
             eventType,
             eventTime,
@@ -1904,101 +1947,101 @@ let api = function Binance( options = {} ) {
         }
         return friendlyData( data );
     }
-    
+
     /**
    * Converts the delivery UserData stream ORDER_TRADE_UPDATE data into a friendly object
    * @param {object} data - user data callback data type
    * @return {object} - user friendly data type
    */
-  const dUserDataOrderUpdateConvertData = (data) => {
-    let {
-      e: eventType,
-      E: eventTime,
-      T: transaction, // transaction time
-      o: order,
-    } = data;
+    const dUserDataOrderUpdateConvertData = ( data ) => {
+        let {
+            e: eventType,
+            E: eventTime,
+            T: transaction, // transaction time
+            o: order,
+        } = data;
 
-    let orderConverter = (order) => {
-      let {
-        s: symbol,
-        c: clientOrderId,
-        // special client order id:
-        // starts with "autoclose-": liquidation order
-        // "adl_autoclose": ADL auto close order
-        S: side,
-        o: orderType,
-        f: timeInForce,
-        q: originalQuantity,
-        p: originalPrice,
-        ap: averagePrice,
-        sp: stopPrice, // please ignore with TRAILING_STOP_MARKET order,
-        x: executionType,
-        X: orderStatus,
-        i: orderId,
-        l: orderLastFilledQuantity,
-        z: orderFilledAccumulatedQuantity,
-        L: lastFilledPrice,
-        ma: marginAsset,
-        N: commissionAsset, // will not push if no commission
-        n: commission, // will not push if no commission
-        T: orderTradeTime,
-        t: tradeId,
-        rp: realizedProfit,
-        b: bidsNotional,
-        a: askNotional,
-        m: isMakerSide, // is this trade maker side
-        R: isReduceOnly, // is this reduce only
-        wt: stopPriceWorkingType,
-        ot: originalOrderType,
-        ps: positionSide,
-        cp: closeAll, // if close-all, pushed with conditional order
-        AP: activationPrice, // only pushed with TRAILING_STOP_MARKET order
-        cr: callbackRate, // only pushed with TRAILING_STOP_MARKET order
-        pP: priceProtect, // If conditional order trigger is protected
-      } = order;
-      return {
-        symbol,
-        clientOrderId,
-        side,
-        orderType,
-        timeInForce,
-        originalQuantity,
-        originalPrice,
-        averagePrice,
-        stopPrice,
-        executionType,
-        orderStatus,
-        orderId,
-        orderLastFilledQuantity,
-        orderFilledAccumulatedQuantity,
-        lastFilledPrice,
-        marginAsset,
-        commissionAsset,
-        commission,
-        orderTradeTime,
-        tradeId,
-        bidsNotional,
-        askNotional,
-        isMakerSide,
-        isReduceOnly,
-        stopPriceWorkingType,
-        originalOrderType,
-        positionSide,
-        closeAll,
-        activationPrice,
-        callbackRate,
-        realizedProfit,
-        priceProtect,
-      };
+        let orderConverter = ( order ) => {
+            let {
+                s: symbol,
+                c: clientOrderId,
+                // special client order id:
+                // starts with "autoclose-": liquidation order
+                // "adl_autoclose": ADL auto close order
+                S: side,
+                o: orderType,
+                f: timeInForce,
+                q: originalQuantity,
+                p: originalPrice,
+                ap: averagePrice,
+                sp: stopPrice, // please ignore with TRAILING_STOP_MARKET order,
+                x: executionType,
+                X: orderStatus,
+                i: orderId,
+                l: orderLastFilledQuantity,
+                z: orderFilledAccumulatedQuantity,
+                L: lastFilledPrice,
+                ma: marginAsset,
+                N: commissionAsset, // will not push if no commission
+                n: commission, // will not push if no commission
+                T: orderTradeTime,
+                t: tradeId,
+                rp: realizedProfit,
+                b: bidsNotional,
+                a: askNotional,
+                m: isMakerSide, // is this trade maker side
+                R: isReduceOnly, // is this reduce only
+                wt: stopPriceWorkingType,
+                ot: originalOrderType,
+                ps: positionSide,
+                cp: closeAll, // if close-all, pushed with conditional order
+                AP: activationPrice, // only pushed with TRAILING_STOP_MARKET order
+                cr: callbackRate, // only pushed with TRAILING_STOP_MARKET order
+                pP: priceProtect, // If conditional order trigger is protected
+            } = order;
+            return {
+                symbol,
+                clientOrderId,
+                side,
+                orderType,
+                timeInForce,
+                originalQuantity,
+                originalPrice,
+                averagePrice,
+                stopPrice,
+                executionType,
+                orderStatus,
+                orderId,
+                orderLastFilledQuantity,
+                orderFilledAccumulatedQuantity,
+                lastFilledPrice,
+                marginAsset,
+                commissionAsset,
+                commission,
+                orderTradeTime,
+                tradeId,
+                bidsNotional,
+                askNotional,
+                isMakerSide,
+                isReduceOnly,
+                stopPriceWorkingType,
+                originalOrderType,
+                positionSide,
+                closeAll,
+                activationPrice,
+                callbackRate,
+                realizedProfit,
+                priceProtect,
+            };
+        };
+        order = orderConverter( order );
+        return {
+            eventType,
+            eventTime,
+            transaction,
+            order,
+        };
     };
-    order = orderConverter(order);
-    return {
-      eventType,
-      eventTime,
-      transaction,
-      order,
-    };
-  };
 
     /**
      * Used as part of the user data websockets callback
@@ -2008,7 +2051,7 @@ let api = function Binance( options = {} ) {
     const userDataHandler = data => {
         let type = data.e;
         if ( type === 'outboundAccountInfo' ) {
-          // XXX: Deprecated in 2020-09-08
+            // XXX: Deprecated in 2020-09-08
         } else if ( type === 'executionReport' ) {
             if ( Binance.options.execution_callback ) Binance.options.execution_callback( data );
         } else if ( type === 'listStatus' ) {
@@ -2028,13 +2071,13 @@ let api = function Binance( options = {} ) {
     const userMarginDataHandler = data => {
         let type = data.e;
         if ( type === 'outboundAccountInfo' ) {
-            Binance.options.margin_balance_callback( data );
+            // XXX: Deprecated in 2020-09-08
         } else if ( type === 'executionReport' ) {
             if ( Binance.options.margin_execution_callback ) Binance.options.margin_execution_callback( data );
         } else if ( type === 'listStatus' ) {
             if ( Binance.options.margin_list_status_callback ) Binance.options.margin_list_status_callback( data );
         } else if ( type === 'outboundAccountPosition' ) {
-            // TODO: Does this mean something?
+            Binance.options.margin_balance_callback( data );
         } else {
             Binance.options.log( 'Unexpected userMarginData: ' + type );
         }
@@ -2048,47 +2091,93 @@ let api = function Binance( options = {} ) {
     const userFutureDataHandler = data => {
         let type = data.e;
         if ( type === 'MARGIN_CALL' ) {
-            Binance.options.future_margin_call_callback( fUserDataMarginConvertData(data) );
+            Binance.options.future_margin_call_callback( fUserDataMarginConvertData( data ) );
         } else if ( type === 'ACCOUNT_UPDATE' ) {
             if ( Binance.options.future_account_update_callback ) {
-                Binance.options.future_account_update_callback( fUserDataAccountUpdateConvertData(data));
+                Binance.options.future_account_update_callback( fUserDataAccountUpdateConvertData( data ) );
             }
         } else if ( type === 'ORDER_TRADE_UPDATE' ) {
             if ( Binance.options.future_order_update_callback ) {
-                Binance.options.future_order_update_callback( fUserDataOrderUpdateConvertData(data));
+                Binance.options.future_order_update_callback( fUserDataOrderUpdateConvertData( data ) );
+            }
+        } else if ( type === 'ACCOUNT_CONFIG_UPDATE' ) {
+            if ( Binance.options.future_account_config_update_callback ) {
+                Binance.options.future_account_config_update_callback( fUserConfigDataAccountUpdateConvertData( data ) );
             }
         } else {
             Binance.options.log( 'Unexpected userFutureData: ' + type );
         }
     };
-    
-   /**
+
+    /**
    * Used as part of the user data websockets callback
    * @param {object} data - user data callback data type
    * @return {undefined}
    */
-      const userDeliveryDataHandler = (data) => {
+    const userDeliveryDataHandler = ( data ) => {
         let type = data.e;
-        if (type === "MARGIN_CALL") {
-          Binance.options.delivery_margin_call_callback(
-            fUserDataMarginConvertData(data)
-          );
-        } else if (type === "ACCOUNT_UPDATE") {
-          if (Binance.options.delivery_account_update_callback) {
-            Binance.options.delivery_account_update_callback(
-              fUserDataAccountUpdateConvertData(data)
+        if ( type === "MARGIN_CALL" ) {
+            Binance.options.delivery_margin_call_callback(
+                fUserDataMarginConvertData( data )
             );
-          }
-        } else if (type === "ORDER_TRADE_UPDATE") {
-          if (Binance.options.delivery_order_update_callback) {
-            Binance.options.delivery_order_update_callback(
-              dUserDataOrderUpdateConvertData(data)
-            );
-          }
+        } else if ( type === "ACCOUNT_UPDATE" ) {
+            if ( Binance.options.delivery_account_update_callback ) {
+                Binance.options.delivery_account_update_callback(
+                    fUserDataAccountUpdateConvertData( data )
+                );
+            }
+        } else if ( type === "ORDER_TRADE_UPDATE" ) {
+            if ( Binance.options.delivery_order_update_callback ) {
+                Binance.options.delivery_order_update_callback(
+                    dUserDataOrderUpdateConvertData( data )
+                );
+            }
         } else {
-          Binance.options.log("Unexpected userDeliveryData: " + type);
+            Binance.options.log( "Unexpected userDeliveryData: " + type );
         }
-      };
+    };
+
+    /**
+   * Transfer between main account and futures/delivery accounts
+   * @param {string} asset - the asset
+   * @param {number} amount - the asset
+   * @param {function} callback - the callback function
+   * @param {object} options - additional options
+   * @return {undefined}
+   */
+    const transferBetweenMainAndFutures = function (
+        asset,
+        amount,
+        type,
+        callback
+    ) {
+        let parameters = Object.assign( {
+            asset,
+            amount,
+            type,
+        } );
+        if ( !callback ) {
+            return new Promise( ( resolve, reject ) => {
+                signedRequest(
+                    sapi + "v1/futures/transfer",
+                    parameters,
+                    function ( error, data ) {
+                        if ( error ) return reject( error );
+                        return resolve( data );
+                    },
+                    "POST"
+                );
+            } );
+        }
+        signedRequest(
+            sapi + "v1/futures/transfer",
+            parameters,
+            function ( error, data ) {
+                if ( callback ) return callback( error, data );
+            },
+            "POST"
+        );
+    };
 
     /**
      * Converts the previous day stream into friendly object
@@ -2831,7 +2920,7 @@ let api = function Binance( options = {} ) {
         * @param {function} callback - the callback function
         * @return {promise or undefined} - omitting the callback returns a promise
         */
-        marketSell: function ( symbol, quantity, flags = { type: 'MARKET' }, callback = false ) {
+       marketSell: function ( symbol, quantity, flags = { type: 'MARKET' }, callback = false ) {
             if ( typeof flags === 'function' ) { // Accept callback as third parameter
                 callback = flags;
                 flags = { type: 'MARKET' };
@@ -3087,7 +3176,7 @@ let api = function Binance( options = {} ) {
                         let result = {};
                         result[symbol] = JSON.parse( response.body ).price;
                         return resolve( result );
-                    } );
+                    } ).on( 'error', reject );
                 } );
             }
             request( addProxy( opt ), ( error, response, body ) => {
@@ -3096,7 +3185,7 @@ let api = function Binance( options = {} ) {
                 let result = {};
                 result[symbol] = JSON.parse( response.body ).price;
                 return callback( null, result );
-            } );
+            } ).on( 'error', callback );
         },
 
         /**
@@ -3119,14 +3208,14 @@ let api = function Binance( options = {} ) {
                         if ( error ) return reject( error );
                         if ( response.statusCode !== 200 ) return reject( response );
                         return resolve( priceData( JSON.parse( body ) ) );
-                    } );
+                    } ).on( 'error', reject );
                 } );
             }
             request( addProxy( opt ), ( error, response, body ) => {
                 if ( error ) return callback( error );
                 if ( response.statusCode !== 200 ) return callback( response );
                 return callback( null, priceData( JSON.parse( body ) ) );
-            } );
+            } ).on( 'error', callback );
         },
 
         /**
@@ -3149,7 +3238,7 @@ let api = function Binance( options = {} ) {
                         if ( response.statusCode !== 200 ) return reject( response );
                         const result = symbol ? JSON.parse( body ) : bookPriceData( JSON.parse( body ) );
                         return resolve( result );
-                    } );
+                    } ).on( 'error', reject );
                 } );
             }
             request( addProxy( opt ), ( error, response, body ) => {
@@ -3157,7 +3246,7 @@ let api = function Binance( options = {} ) {
                 if ( response.statusCode !== 200 ) return callback( response );
                 const result = symbol ? JSON.parse( body ) : bookPriceData( JSON.parse( body ) );
                 return callback( null, result );
-            } );
+            } ).on( 'error', callback );
         },
 
         /**
@@ -3232,12 +3321,12 @@ let api = function Binance( options = {} ) {
             }
         },
 
-        dustTransfer: function (assets, callback) {
-          signedRequest(sapi + 'v1/asset/dust', { asset: assets }, callback, 'POST');
+        dustTransfer: function ( assets, callback ) {
+            signedRequest( sapi + 'v1/asset/dust', { asset: assets }, callback, 'POST' );
         },
 
-        assetDividendRecord: function (callback, params = {}) {
-          signedRequest(sapi + 'v1/asset/assetDividend', params, callback);
+        assetDividendRecord: function ( callback, params = {} ) {
+            signedRequest( sapi + 'v1/asset/assetDividend', params, callback );
         },
 
         /**
@@ -3524,15 +3613,19 @@ let api = function Binance( options = {} ) {
                         }
                     }
                     publicRequest( base + 'v3/time', {}, function ( error, response ) {
-                        Binance.info.timeOffset = response.serverTime - new Date().getTime();
-                        //Binance.options.log("server time set: ", response.serverTime, Binance.info.timeOffset);
+                        if ( !error ) {
+                            Binance.info.timeOffset = response.serverTime - new Date().getTime();
+                            //Binance.options.log("server time set: ", response.serverTime, Binance.info.timeOffset);
+                        }
                         callback( error, response );
                     } );
                 } )
             } else {
                 publicRequest( base + 'v3/time', {}, function ( error, response ) {
-                    Binance.info.timeOffset = response.serverTime - new Date().getTime();
-                    //Binance.options.log("server time set: ", response.serverTime, Binance.info.timeOffset);
+                    if ( !error ) {
+                        Binance.info.timeOffset = response.serverTime - new Date().getTime();
+                        //Binance.options.log("server time set: ", response.serverTime, Binance.info.timeOffset);
+                    }
                     callback( error, response );
                 } );
             }
@@ -3893,6 +3986,16 @@ let api = function Binance( options = {} ) {
             return promiseRequest( 'v1/leverageBracket', params, { base:fapi, type:'USER_DATA' } );
         },
 
+        futuresTradingStatus: async ( symbol = false, params = {} ) => {
+            if ( symbol ) params.symbol = symbol;
+            return promiseRequest( 'v1/apiTradingStatus', params, { base:fapi, type:'USER_DATA' } );
+        },
+
+        futuresCommissionRate: async ( symbol = false, params = {} ) => {
+            if ( symbol ) params.symbol = symbol;
+            return promiseRequest( 'v1/commissionRate', params, { base:fapi, type:'USER_DATA' } );
+        },
+
         // leverage 1 to 125
         futuresLeverage: async ( symbol, leverage, params = {} ) => {
             params.symbol = symbol;
@@ -4008,12 +4111,12 @@ let api = function Binance( options = {} ) {
         },
 
         futuresHistDataId: async ( symbol = false, params = {} ) => {
-            if (symbol) params.symbol = symbol;
-            return promiseRequest( 'v1/futuresHistDataId', params, {base: sapi, type: 'SIGNED', method: 'POST'} )
+            if ( symbol ) params.symbol = symbol;
+            return promiseRequest( 'v1/futuresHistDataId', params, { base: sapi, type: 'SIGNED', method: 'POST' } )
         },
 
-        futuresDownloadLink: async (downloadId) => {
-            return promiseRequest( 'v1/downloadLink', { downloadId }, {base: sapi, type: 'SIGNED'} )
+        futuresDownloadLink: async ( downloadId ) => {
+            return promiseRequest( 'v1/downloadLink', { downloadId }, { base: sapi, type: 'SIGNED' } )
         },
 
         // futures websockets support: ticker bookTicker miniTicker aggTrade markPrice
@@ -4096,7 +4199,7 @@ let api = function Binance( options = {} ) {
         deliveryContinuousKlines: async ( pair, contractType = "CURRENT_QUARTER", interval = "30m", params = {} ) => {
             params.pair = pair;
             params.interval = interval;
-            pairs.contractType = contractType;
+            params.contractType = contractType;
             return promiseRequest( 'v1/continuousKlines', params, { base:dapi } );
         },
 
@@ -4161,6 +4264,11 @@ let api = function Binance( options = {} ) {
         deliveryLeverageBracket: async ( symbol = false, params = {} ) => {
             if ( symbol ) params.symbol = symbol;
             return promiseRequest( 'v1/leverageBracket', params, { base:dapi, type:'USER_DATA' } );
+        },
+
+        deliveryLeverageBracketSymbols: async ( symbol = false, params = {} ) => {
+            if ( symbol ) params.symbol = symbol;
+            return promiseRequest( 'v2/leverageBracket', params, { base:dapi, type:'USER_DATA' } );
         },
 
         // leverage 1 to 125
@@ -4264,6 +4372,14 @@ let api = function Binance( options = {} ) {
             return promiseRequest( 'v1/allOrders', params, { base:dapi, type:'SIGNED' } );
         },
 
+        deliveryPositionSideDual: async ( params = {} ) => {
+            return promiseRequest( 'v1/positionSide/dual', params, { base:dapi, type:'SIGNED' } );
+        },
+
+        deliveryChangePositionSideDual: async ( dualSidePosition, params = {} ) => {
+            params.dualSidePosition = dualSidePosition;
+            return promiseRequest( 'v1/positionSide/dual', params, { base:dapi, type:'SIGNED', method:'POST' } );
+        },
 
         //** Margin methods */
         /**
@@ -4274,10 +4390,11 @@ let api = function Binance( options = {} ) {
          * @param {numeric} price - the price to pay for each unit
          * @param {object} flags - additional buy order flags
          * @param {function} callback - the callback function
+         * @param {string} isIsolated - the isolate margin option
          * @return {undefined}
          */
-        mgOrder: function ( side, symbol, quantity, price, flags = {}, callback = false ) {
-            marginOrder( side, symbol, quantity, price, flags, callback );
+        mgOrder: function ( side, symbol, quantity, price, flags = {}, callback = false,isIsolated='FALSE'  ) {
+            marginOrder( side, symbol, quantity, price, {...flags,isIsolated}, callback );
         },
 
         /**
@@ -4287,10 +4404,11 @@ let api = function Binance( options = {} ) {
          * @param {numeric} price - the price to pay for each unit
          * @param {object} flags - additional buy order flags
          * @param {function} callback - the callback function
+         * @param {string} isIsolated - the isolate margin option
          * @return {undefined}
          */
-        mgBuy: function ( symbol, quantity, price, flags = {}, callback = false ) {
-            marginOrder( 'BUY', symbol, quantity, price, flags, callback );
+        mgBuy: function ( symbol, quantity, price, flags = {}, callback = false,isIsolated='FALSE'  ) {
+            marginOrder( 'BUY', symbol, quantity, price, {...flags,isIsolated}, callback );
         },
 
         /**
@@ -4300,10 +4418,11 @@ let api = function Binance( options = {} ) {
          * @param {numeric} price - the price to sell each unit for
          * @param {object} flags - additional order flags
          * @param {function} callback - the callback function
+         * @param {string} isIsolated - the isolate margin option
          * @return {undefined}
          */
-        mgSell: function ( symbol, quantity, price, flags = {}, callback = false ) {
-            marginOrder( 'SELL', symbol, quantity, price, flags, callback );
+        mgSell: function ( symbol, quantity, price, flags = {}, callback = false,isIsolated='FALSE'  ) {
+            marginOrder( 'SELL', symbol, quantity, price, {...flags,isIsolated}, callback );
         },
 
         /**
@@ -4312,15 +4431,16 @@ let api = function Binance( options = {} ) {
          * @param {numeric} quantity - the quantity required
          * @param {object} flags - additional buy order flags
          * @param {function} callback - the callback function
+         * @param {string} isIsolated - the isolate margin option
          * @return {undefined}
          */
-        mgMarketBuy: function ( symbol, quantity, flags = { type: 'MARKET' }, callback = false ) {
+        mgMarketBuy: function ( symbol, quantity, flags = { type: 'MARKET' }, callback = false,isIsolated='FALSE' ) {
             if ( typeof flags === 'function' ) { // Accept callback as third parameter
                 callback = flags;
                 flags = { type: 'MARKET' };
             }
             if ( typeof flags.type === 'undefined' ) flags.type = 'MARKET';
-            marginOrder( 'BUY', symbol, quantity, 0, flags, callback );
+            marginOrder( 'BUY', symbol, quantity, 0, {...flags,isIsolated}, callback );
         },
 
         /**
@@ -4329,15 +4449,16 @@ let api = function Binance( options = {} ) {
          * @param {numeric} quantity - the quantity required
          * @param {object} flags - additional sell order flags
          * @param {function} callback - the callback function
+         * @param {string} isIsolated - the isolate margin option
          * @return {undefined}
          */
-        mgMarketSell: function ( symbol, quantity, flags = { type: 'MARKET' }, callback = false ) {
+        mgMarketSell: function ( symbol, quantity, flags = { type: 'MARKET' }, callback = false, isIsolated='FALSE'  ) {
             if ( typeof flags === 'function' ) { // Accept callback as third parameter
                 callback = flags;
                 flags = { type: 'MARKET' };
             }
             if ( typeof flags.type === 'undefined' ) flags.type = 'MARKET';
-            marginOrder( 'SELL', symbol, quantity, 0, flags, callback );
+            marginOrder( 'SELL', symbol, quantity, 0, {...flags,isIsolated}, callback );
         },
 
         /**
@@ -4347,8 +4468,8 @@ let api = function Binance( options = {} ) {
          * @param {function} callback - the callback function
          * @return {undefined}
          */
-        mgCancel: function ( symbol, orderid, callback = false ) {
-            signedRequest( sapi + 'v1/margin/order', { symbol: symbol, orderId: orderid }, function ( error, data ) {
+        mgCancel: function ( symbol, orderid, callback = false,isIsolated='FALSE') {
+            signedRequest( sapi + 'v1/margin/order', { symbol: symbol, orderId: orderid,isIsolated }, function ( error, data ) {
                 if ( callback ) return callback.call( this, error, data, symbol );
             }, 'DELETE' );
         },
@@ -4461,6 +4582,48 @@ let api = function Binance( options = {} ) {
         },
 
         /**
+     * Transfer from main account to delivery account
+     * @param {string} asset - the asset
+     * @param {number} amount - the asset
+     * @param {function} callback - the callback function (optionnal)
+     * @param {object} options - additional options
+     * @return {undefined}
+     */
+        transferMainToFutures: ( asset, amount, callback ) =>
+            transferBetweenMainAndFutures( asset, amount, 1, callback ),
+
+        /**
+     * Transfer from delivery account to main account
+     * @param {string} asset - the asset
+     * @param {number} amount - the asset
+     * @param {function} callback - the callback function (optionnal)
+     * @return {undefined}
+     */
+        transferFuturesToMain: ( asset, amount, callback ) =>
+            transferBetweenMainAndFutures( asset, amount, 2, callback ),
+
+        /**
+     * Transfer from main account to delivery account
+     * @param {string} asset - the asset
+     * @param {number} amount - the asset
+     * @param {function} callback - the callback function (optionnal)
+     * @param {object} options - additional options
+     * @return {undefined}
+     */
+        transferMainToDelivery: ( asset, amount, callback ) =>
+            transferBetweenMainAndFutures( asset, amount, 3, callback ),
+
+        /**
+     * Transfer from delivery account to main account
+     * @param {string} asset - the asset
+     * @param {number} amount - the asset
+     * @param {function} callback - the callback function (optionnal)
+     * @return {undefined}
+     */
+        transferDeliveryToMain: ( asset, amount, callback ) =>
+            transferBetweenMainAndFutures( asset, amount, 4, callback ),
+
+        /**
          * Get maximum transfer-out amount of an asset
          * @param {string} asset - the asset
          * @param {function} callback - the callback function
@@ -4477,11 +4640,18 @@ let api = function Binance( options = {} ) {
          * @param {string} asset - the asset
          * @param {number} amount - the asset
          * @param {function} callback - the callback function
+         * @param {string} isIsolated - the isolated option
+         * @param {string} symbol - symbol for isolated margin
          * @return {undefined}
          */
-        mgBorrow: function ( asset, amount, callback ) {
+        mgBorrow: function ( asset, amount, callback, isIsolated='FALSE',symbol=null ) {
             let parameters = Object.assign( { asset: asset, amount: amount } );
-            signedRequest( sapi + 'v1/margin/loan', parameters, function ( error, data ) {
+            if (isIsolated ==='TRUE' && !symbol) throw new Error('If "isIsolated" = "TRUE", "symbol" must be sent')
+            const isolatedObj = isIsolated === 'TRUE'?{
+                isIsolated,
+                symbol
+            }:{}
+            signedRequest( sapi + 'v1/margin/loan', {...parameters,...isolatedObj}, function ( error, data ) {
                 if ( callback ) return callback( error, data );
             }, 'POST' );
         },
@@ -4491,21 +4661,30 @@ let api = function Binance( options = {} ) {
          * @param {string} asset - the asset
          * @param {number} amount - the asset
          * @param {function} callback - the callback function
+         * @param {string} isIsolated - the isolated option
+         * @param {string} symbol - symbol for isolated margin
          * @return {undefined}
          */
-        mgRepay: function ( asset, amount, callback ) {
+        mgRepay: function ( asset, amount, callback ,isIsolated='FALSE',symbol=null ) {
             let parameters = Object.assign( { asset: asset, amount: amount } );
-            signedRequest( sapi + 'v1/margin/repay', parameters, function ( error, data ) {
+            if (isIsolated ==='TRUE' && !symbol) throw new Error('If "isIsolated" = "TRUE", "symbol" must be sent')
+            const isolatedObj = isIsolated === 'TRUE'?{
+                isIsolated,
+                symbol
+            }:{}
+            signedRequest( sapi + 'v1/margin/repay', {...parameters,...isolatedObj}, function ( error, data ) {
                 if ( callback ) return callback( error, data );
             }, 'POST' );
         },
         /**
          * Margin account details
          * @param {function} callback - the callback function
+         * @param {boolean} isIsolated - the callback function
          * @return {undefined}
          */
-        mgAccount: function( callback ) {
-            signedRequest( sapi + 'v1/margin/account', {}, function( error, data ) {
+        mgAccount: function( callback ,isIsolated = false) {
+            const endpoint = 'v1/margin' + (isIsolated)?'/isolated':''  + '/account'
+            signedRequest( sapi + endpoint, {}, function( error, data ) {
                 if( callback ) return callback( error, data );
             } );
         },
@@ -4597,7 +4776,7 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) fMarkPriceStream( symbol, callback, speed);
+                if ( Binance.options.reconnect ) fMarkPriceStream( symbol, callback, speed );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@markPrice` : '!markPrice@arr'
             let subscription = futuresSubscribeSingle( endpoint + speed, data => callback( fMarkPriceConvertData( data ) ), { reconnect } );
@@ -5087,18 +5266,18 @@ let api = function Binance( options = {} ) {
              * @param {function} order_update_callback
              * @param {Function} subscribed_callback - subscription callback
              */
-            userFutureData: function userFutureData( margin_call_callback, account_update_callback = undefined, order_update_callback = undefined, subscribed_callback = undefined) {
+            userFutureData: function userFutureData( margin_call_callback, account_update_callback = undefined, order_update_callback = undefined, subscribed_callback = undefined, account_config_update_callback = undefined ) {
                 const url = ( Binance.options.test ) ? fapiTest : fapi;
-                
+
                 let reconnect = () => {
-                    if (Binance.options.reconnect) userFutureData(margin_call_callback, account_update_callback, order_update_callback, subscribed_callback)
+                    if ( Binance.options.reconnect ) userFutureData( margin_call_callback, account_update_callback, order_update_callback, subscribed_callback )
                 }
-                
+
                 apiRequest( url + 'v1/listenKey', {}, function ( error, response ) {
                     Binance.options.listenFutureKey = response.listenKey;
                     setTimeout( function userDataKeepAlive() { // keepalive
                         try {
-                            apiRequest( fapi + 'v1/listenKey?listenKey=' + Binance.options.listenFutureKey, {}, function ( err ) {
+                            apiRequest( url + 'v1/listenKey?listenKey=' + Binance.options.listenFutureKey, {}, function ( err ) {
                                 if ( err ) setTimeout( userDataKeepAlive, 60000 ); // retry in 1 minute
                                 else setTimeout( userDataKeepAlive, 60 * 30 * 1000 ); // 30 minute keepalive
                             }, 'PUT' );
@@ -5108,12 +5287,13 @@ let api = function Binance( options = {} ) {
                     }, 60 * 30 * 1000 ); // 30 minute keepalive
                     Binance.options.future_margin_call_callback = margin_call_callback;
                     Binance.options.future_account_update_callback = account_update_callback;
+                    Binance.options.future_account_config_update_callback = account_config_update_callback;
                     Binance.options.future_order_update_callback = order_update_callback;
                     const subscription = futuresSubscribe( Binance.options.listenFutureKey, userFutureDataHandler, { reconnect } );
                     if ( subscribed_callback ) subscribed_callback( subscription.endpoint );
                 }, 'POST' );
             },
-            
+
             /**
            * Delivery Userdata websockets function
            * @param {function} margin_call_callback
@@ -5121,61 +5301,61 @@ let api = function Binance( options = {} ) {
            * @param {function} order_update_callback
            * @param {Function} subscribed_callback - subscription callback
            */
-          userDeliveryData: function userDeliveryData(
-            margin_call_callback,
-            account_update_callback = undefined,
-            order_update_callback = undefined,
-            subscribed_callback = undefined
-          ) {
-            const url = Binance.options.test ? dapiTest : dapi;
+            userDeliveryData: function userDeliveryData(
+                margin_call_callback,
+                account_update_callback = undefined,
+                order_update_callback = undefined,
+                subscribed_callback = undefined
+            ) {
+                const url = Binance.options.test ? dapiTest : dapi;
 
-            let reconnect = () => {
-              if (Binance.options.reconnect)
-                userDeliveryData(
-                  margin_call_callback,
-                  account_update_callback,
-                  order_update_callback,
-                  subscribed_callback
-                );
-            };
+                let reconnect = () => {
+                    if ( Binance.options.reconnect )
+                        userDeliveryData(
+                            margin_call_callback,
+                            account_update_callback,
+                            order_update_callback,
+                            subscribed_callback
+                        );
+                };
 
-            apiRequest(
-              url + "v1/listenKey",
-              {},
-              function (error, response) {
-                Binance.options.listenDeliveryKey = response.listenKey;
-                setTimeout(function userDataKeepAlive() {
-                  // keepalive
-                  try {
-                    apiRequest(
-                      url +
+                apiRequest(
+                    url + "v1/listenKey",
+                    {},
+                    function ( error, response ) {
+                        Binance.options.listenDeliveryKey = response.listenKey;
+                        setTimeout( function userDataKeepAlive() {
+                            // keepalive
+                            try {
+                                apiRequest(
+                                    url +
                         "v1/listenKey?listenKey=" +
                         Binance.options.listenDeliveryKey,
-                      {},
-                      function (err) {
-                        if (err) setTimeout(userDataKeepAlive, 60000);
-                        // retry in 1 minute
-                        else setTimeout(userDataKeepAlive, 60 * 30 * 1000); // 30 minute keepalive
-                      },
-                      "PUT"
-                    );
-                  } catch (error) {
-                    setTimeout(userDataKeepAlive, 60000); // retry in 1 minute
-                  }
-                }, 60 * 30 * 1000); // 30 minute keepalive
-                Binance.options.delivery_margin_call_callback = margin_call_callback;
-                Binance.options.delivery_account_update_callback = account_update_callback;
-                Binance.options.delivery_order_update_callback = order_update_callback;
-                const subscription = deliverySubscribe(
-                  Binance.options.listenDeliveryKey,
-                  userDeliveryDataHandler,
-                  { reconnect }
+                                    {},
+                                    function ( err ) {
+                                        if ( err ) setTimeout( userDataKeepAlive, 60000 );
+                                        // retry in 1 minute
+                                        else setTimeout( userDataKeepAlive, 60 * 30 * 1000 ); // 30 minute keepalive
+                                    },
+                                    "PUT"
+                                );
+                            } catch ( error ) {
+                                setTimeout( userDataKeepAlive, 60000 ); // retry in 1 minute
+                            }
+                        }, 60 * 30 * 1000 ); // 30 minute keepalive
+                        Binance.options.delivery_margin_call_callback = margin_call_callback;
+                        Binance.options.delivery_account_update_callback = account_update_callback;
+                        Binance.options.delivery_order_update_callback = order_update_callback;
+                        const subscription = deliverySubscribe(
+                            Binance.options.listenDeliveryKey,
+                            userDeliveryDataHandler,
+                            { reconnect }
+                        );
+                        if ( subscribed_callback ) subscribed_callback( subscription.endpoint );
+                    },
+                    "POST"
                 );
-                if (subscribed_callback) subscribed_callback(subscription.endpoint);
-              },
-              "POST"
-            );
-          },
+            },
 
             /**
              * Subscribe to a generic websocket
@@ -5585,7 +5765,7 @@ let api = function Binance( options = {} ) {
              */
             prevDay: function prevDay( symbols, callback, singleCallback ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) prevDay( symbols, callback );
+                    if ( Binance.options.reconnect ) prevDay( symbols, callback, singleCallback );
                 };
 
                 let subscription;
